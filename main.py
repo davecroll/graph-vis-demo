@@ -140,24 +140,21 @@ async def get_entity_graph(label: str, name: str):
         query = """
             MATCH (b:Borrower {name: $name})-[r1:BORROWED]->(d:Deal)
             OPTIONAL MATCH (l:Lender)-[r2:LENT_TO]->(d)
-            OPTIONAL MATCH (b)-[r3:IN_SECTOR]->(s:Sector)
             OPTIONAL MATCH (l)-[r4:LENT_TO]->(d2:Deal) WHERE d2 <> d
             OPTIONAL MATCH (b2:Borrower)-[r5:BORROWED]->(d2)
-            OPTIONAL MATCH (b2)-[r6:IN_SECTOR]->(s2:Sector)
-            RETURN b, r1, d, l, r2, s, r3, d2, r4, b2, r5, s2, r6
+            RETURN b, r1, d, l, r2, d2, r4, b2, r5
         """
-        inner_keys = ("b", "d", "l", "s")
-        outer_keys = ("d2", "b2", "s2")
+        inner_keys = ("b", "d", "l")
+        outer_keys = ("d2", "b2")
     elif label == "Lender":
         query = """
             MATCH (l:Lender {name: $name})-[r2:LENT_TO]->(d:Deal)
             OPTIONAL MATCH (b:Borrower)-[r1:BORROWED]->(d)
-            OPTIONAL MATCH (b)-[r3:IN_SECTOR]->(s:Sector)
             OPTIONAL MATCH (b)-[r4:BORROWED]->(d2:Deal) WHERE d2 <> d
             OPTIONAL MATCH (l2:Lender)-[r5:LENT_TO]->(d2)
-            RETURN b, r1, d, l, r2, s, r3, d2, r4, l2, r5
+            RETURN b, r1, d, l, r2, d2, r4, l2, r5
         """
-        inner_keys = ("b", "d", "l", "s")
+        inner_keys = ("b", "d", "l")
         outer_keys = ("d2", "l2")
     else:
         raise HTTPException(status_code=400, detail="Label must be Borrower or Lender")
@@ -209,15 +206,6 @@ async def get_entity_graph(label: str, name: str):
                 edge_set.add(ek)
                 edges.append(_build_vis_edge(record["r2"], l_id, d_id))
 
-        # borrower -> sector
-        if record.get("r3") is not None:
-            b_id = _node_id("Borrower", record["b"]["name"])
-            s_id = _node_id("Sector", record["s"]["name"])
-            ek = (b_id, "IN_SECTOR", s_id)
-            if ek not in edge_set:
-                edge_set.add(ek)
-                edges.append(_build_vis_edge(record["r3"], b_id, s_id))
-
         # outer hop: lender/borrower -> deal2 (r4)
         if record.get("r4") is not None and record.get("d2") is not None:
             if label == "Borrower":
@@ -250,18 +238,6 @@ async def get_entity_graph(label: str, name: str):
                     if ek not in edge_set:
                         edge_set.add(ek)
                         edges.append(_build_vis_edge(record["r5"], outer_id, d2_id))
-
-        # outer hop: borrower2 -> sector2 (r6, Borrower query only)
-        if label == "Borrower" and record.get("r6") is not None:
-            b2 = record.get("b2")
-            s2 = record.get("s2")
-            if b2 is not None and s2 is not None:
-                b2_id = _node_id("Borrower", b2["name"])
-                s2_id = _node_id("Sector", s2["name"])
-                ek = (b2_id, "IN_SECTOR", s2_id)
-                if ek not in edge_set:
-                    edge_set.add(ek)
-                    edges.append(_build_vis_edge(record["r6"], b2_id, s2_id))
 
     # Fade outer-hop nodes: smaller size, dimmer color
     for nid, node_data in nodes_map.items():
