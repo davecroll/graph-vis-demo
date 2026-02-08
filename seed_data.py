@@ -6,8 +6,7 @@ URI = "bolt://localhost:7687"
 AUTH = ("neo4j", "demo1234")
 
 
-def seed(tx):
-    # Clear existing data
+def seed(tx) -> None:
     tx.run("MATCH (n) DETACH DELETE n")
 
     # --- Sectors ---
@@ -47,10 +46,10 @@ def seed(tx):
         {"name": "Monroe Capital", "type": "Credit Fund", "aum_bn": 4.2},
         {"name": "Owl Rock (Blue Owl)", "type": "BDC", "aum_bn": 11.0},
     ]
-    for l in lenders:
+    for lender in lenders:
         tx.run(
             "CREATE (:Lender {name: $name, type: $type, aum_bn: $aum_bn})",
-            **l,
+            **lender,
         )
     print(f"  Created {len(lenders)} Lenders")
 
@@ -119,7 +118,7 @@ def seed(tx):
     print(f"  Created {len(participations)} LENT_TO relationships")
 
 
-def main():
+def main() -> None:
     print("Connecting to Neo4j...")
     driver = GraphDatabase.driver(URI, auth=AUTH)
     driver.verify_connectivity()
