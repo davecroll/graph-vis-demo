@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Direct Lending Graph</title>
+<script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+  header { background: #16213e; padding: 12px 24px; display: flex; align-items: center; gap: 18px; border-bottom: 1px solid #0f3460; }
+  header h1 { font-size: 1.2rem; color: #e0e0e0; }
+  .back-link { color: #4A90D9; text-decoration: none; font-size: 0.9rem; }
+  .back-link:hover { text-decoration: underline; }
+  .main { display: flex; flex: 1; overflow: hidden; }
+  #graph-container { flex: 1; }
+  #sidebar { width: 340px; background: #16213e; border-left: 1px solid #0f3460; padding: 20px; overflow-y: auto; transition: transform 0.2s; }
+  #sidebar.hidden { transform: translateX(100%); width: 0; padding: 0; overflow: hidden; }
+  #sidebar h2 { font-size: 1rem; margin-bottom: 12px; color: #e94560; }
+  #sidebar .label-tag { display: inline-block; background: #0f3460; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; margin-bottom: 8px; }
+  #sidebar table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  #sidebar td { padding: 4px 8px; font-size: 0.85rem; border-bottom: 1px solid #0f3460; }
+  #sidebar td:first-child { color: #a0a0c0; width: 40%; }
+  #sidebar h3 { font-size: 0.9rem; margin: 12px 0 6px; color: #e94560; }
+  .conn-item { background: #0f3460; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; font-size: 0.82rem; cursor: pointer; }
+  .conn-item:hover { background: #1a1a4e; }
+  .conn-rel { color: #f0ad4e; font-weight: 600; }
+  .conn-name { color: #e0e0e0; }
+  .conn-detail { color: #a0a0c0; font-size: 0.75rem; }
+  #legend { position: absolute; bottom: 16px; left: 16px; background: rgba(22,33,62,0.92); border: 1px solid #0f3460; border-radius: 8px; padding: 12px 16px; z-index: 10; }
+  #legend h4 { font-size: 0.8rem; margin-bottom: 6px; color: #a0a0c0; }
+  .legend-item { display: flex; align-items: center; margin-bottom: 4px; font-size: 0.8rem; }
+  .legend-dot { width: 14px; height: 14px; margin-right: 8px; border-radius: 2px; }
+  #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.2rem; color: #a0a0c0; }
+</style>
+</head>
+<body>
+<header>
+  <a class="back-link" href="/">&larr; Back to list</a>
+  <h1 id="page-title">Loading...</h1>
+</header>
+<div class="main" style="position: relative;">
+  <div id="graph-container">
+    <div id="loading">Loading graph data...</div>
+  </div>
+  <div id="sidebar" class="hidden">
+    <div id="sidebar-content"></div>
+  </div>
+  <div id="legend">
+    <h4>Node Types</h4>
+    <div class="legend-item"><div class="legend-dot" style="background:#4A90D9;border-radius:50%;"></div>Borrower</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#5CB85C;transform:rotate(45deg);"></div>Lender</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#F0AD4E;"></div>Deal</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#9B59B6;clip-path:polygon(50% 0%,0% 100%,100% 100%);"></div>Sector</div>
+  </div>
+</div>
+<script>
+let network = null;
+
+// Parse label and name from URL path: /entity/{label}/{name}
+const pathParts = decodeURIComponent(window.location.pathname).split('/');
+// pathParts = ["", "entity", label, name]
+const entityLabel = pathParts[2];
+const entityName = pathParts.slice(3).join('/');
+
+document.getElementById('page-title').textContent = `${entityLabel}: ${entityName}`;
+document.title = `${entityName} - Direct Lending Graph`;
+
+async function loadGraph() {
+  const res = await fetch(`/api/graph/${encodeURIComponent(entityLabel)}/${encodeURIComponent(entityName)}`);
+  if (!res.ok) {
+    document.getElementById('loading').textContent = 'Entity not found.';
+    return;
+  }
+  const data = await res.json();
+
+  document.getElementById('loading').remove();
+
+  const nodes = new vis.DataSet(data.nodes);
+  const edges = new vis.DataSet(data.edges);
+
+  const container = document.getElementById('graph-container');
+  const options = {
+    physics: {
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: {
+        gravitationalConstant: -50,
+        centralGravity: 0.01,
+        springLength: 140,
+        springConstant: 0.02,
+        damping: 0.4,
+      },
+      stabilization: { iterations: 300 },
+    },
+    interaction: {
+      hover: true,
+      tooltipDelay: 150,
+      zoomView: true,
+    },
+    edges: {
+      color: { color: '#3a3a5c', highlight: '#e94560', hover: '#e94560' },
+      smooth: { type: 'dynamic' },
+    },
+    nodes: {
+      font: { color: '#e0e0e0', size: 12 },
+      borderWidth: 0,
+    },
+  };
+
+  network = new vis.Network(container, { nodes, edges }, options);
+
+  const targetId = `${entityLabel}:${entityName}`;
+  network.once('stabilizationIterationsDone', () => {
+    network.focus(targetId, { scale: 1.0, animation: false });
+  });
+
+  network.on('click', async (params) => {
+    if (params.nodes.length === 0) {
+      document.getElementById('sidebar').classList.add('hidden');
+      return;
+    }
+    const nodeId = params.nodes[0];
+    const [label, ...nameParts] = nodeId.split(':');
+    const name = nameParts.join(':');
+    await showNodeDetail(label, name);
+  });
+}
+
+async function showNodeDetail(label, name) {
+  const sidebar = document.getElementById('sidebar');
+  const content = document.getElementById('sidebar-content');
+  sidebar.classList.remove('hidden');
+  content.innerHTML = '<p>Loading...</p>';
+
+  try {
+    const res = await fetch(`/api/node/${encodeURIComponent(label)}/${encodeURIComponent(name)}`);
+    const data = await res.json();
+
+    let html = `<span class="label-tag">${data.label}</span>`;
+    html += `<h2>${data.name}</h2>`;
+
+    html += '<table>';
+    for (const [k, v] of Object.entries(data.properties)) {
+      if (k === 'name') continue;
+      let display = v;
+      if (k.includes('_mm')) display = `$${v}MM`;
+      else if (k.includes('_bn')) display = `$${v}B`;
+      else if (k.includes('_bps')) display = `${v} bps`;
+      html += `<tr><td>${k.replace(/_/g, ' ')}</td><td>${display}</td></tr>`;
+    }
+    html += '</table>';
+
+    if (data.connections.length > 0) {
+      html += '<h3>Connections</h3>';
+      for (const conn of data.connections) {
+        let detail = '';
+        const rp = conn.relationship_props;
+        if (rp.commitment_mm) detail = `$${rp.commitment_mm}MM`;
+        if (rp.role) detail += (detail ? ' | ' : '') + rp.role;
+
+        const isNavigable = conn.node_label === 'Borrower' || conn.node_label === 'Lender';
+        const escapedName = conn.node_name.replace(/'/g, "\\'");
+
+        if (isNavigable) {
+          html += `<div class="conn-item" onclick="navigateToEntity('${conn.node_label}','${escapedName}')">`;
+        } else {
+          html += `<div class="conn-item" onclick="focusNode('${conn.node_label}','${escapedName}')">`;
+        }
+        html += `<div class="conn-rel">${conn.relationship.replace(/_/g, ' ')}</div>`;
+        html += `<div class="conn-name">${conn.node_label}: ${conn.node_name}</div>`;
+        if (detail) html += `<div class="conn-detail">${detail}</div>`;
+        html += '</div>';
+      }
+    }
+
+    content.innerHTML = html;
+  } catch (e) {
+    content.innerHTML = '<p>Error loading details.</p>';
+  }
+}
+
+function navigateToEntity(label, name) {
+  window.location.href = `/entity/${encodeURIComponent(label)}/${encodeURIComponent(name)}`;
+}
+
+function focusNode(label, name) {
+  const nodeId = `${label}:${name}`;
+  if (network) {
+    network.selectNodes([nodeId]);
+    network.focus(nodeId, { scale: 1.2, animation: { duration: 500, easingFunction: 'easeInOutQuad' } });
+  }
+  showNodeDetail(label, name);
+}
+
+// Pre-populate sidebar with the entity detail
+async function loadInitialDetail() {
+  await showNodeDetail(entityLabel, entityName);
+}
+
+loadGraph();
+loadInitialDetail();
+</script>
+</body>
+</html>
