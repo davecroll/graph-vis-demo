@@ -42,6 +42,36 @@ Accept: application/json
 
 ###
 
+### Get entities list (borrowers + lenders with stats)
+GET http://127.0.0.1:8000/api/entities
+Accept: application/json
+
+###
+
+### Get entity-scoped graph - Borrower
+GET http://127.0.0.1:8000/api/graph/Borrower/MedTech%20Solutions
+Accept: application/json
+
+###
+
+### Get entity-scoped graph - Lender
+GET http://127.0.0.1:8000/api/graph/Lender/Ares%20Capital
+Accept: application/json
+
+###
+
+### Entity page - Borrower
+GET http://127.0.0.1:8000/entity/Borrower/MedTech%20Solutions
+Accept: text/html
+
+###
+
+### Entity page - Lender
+GET http://127.0.0.1:8000/entity/Lender/Ares%20Capital
+Accept: text/html
+
+###
+
 ### 404 - nonexistent node
 GET http://127.0.0.1:8000/api/node/Borrower/Nonexistent
 Accept: application/json

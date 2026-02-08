@@ -48,6 +48,158 @@ def _node_id(label: str, name: str) -> str:
     return f"{label}:{name}"
 
 
+@app.get("/entity/{label}/{name}")
+async def entity_page(label: str, name: str):
+    return FileResponse(STATIC_DIR / "entity.html")
+
+
+@app.get("/api/entities")
+async def get_entities():
+    """Return borrowers and lenders with summary stats for the homepage."""
+    records, _, _ = driver.execute_query(
+        """MATCH (b:Borrower)-[:BORROWED]->(d:Deal)
+           WITH b, count(d) AS deal_count, sum(d.amount_mm) AS total_volume_mm
+           RETURN b, deal_count, total_volume_mm
+           ORDER BY b.name""",
+        database_="neo4j",
+    )
+    borrowers = []
+    for r in records:
+        node = r["b"]
+        props = dict(node)
+        props["deal_count"] = r["deal_count"]
+        props["total_volume_mm"] = r["total_volume_mm"]
+        borrowers.append(props)
+
+    records, _, _ = driver.execute_query(
+        """MATCH (l:Lender)-[p:LENT_TO]->(d:Deal)
+           WITH l, count(d) AS deal_count, sum(p.commitment_mm) AS total_commitment_mm
+           RETURN l, deal_count, total_commitment_mm
+           ORDER BY l.name""",
+        database_="neo4j",
+    )
+    lenders = []
+    for r in records:
+        node = r["l"]
+        props = dict(node)
+        props["deal_count"] = r["deal_count"]
+        props["total_commitment_mm"] = r["total_commitment_mm"]
+        lenders.append(props)
+
+    return {"borrowers": borrowers, "lenders": lenders}
+
+
+def _build_vis_node(node):
+    """Convert a Neo4j node to a vis.js node dict."""
+    label = list(node.labels)[0]
+    name = node["name"]
+    nid = _node_id(label, name)
+    style = STYLE.get(label, {"color": "#999", "shape": "dot", "size": 15})
+    props = dict(node)
+    title_lines = [f"<b>{label}: {name}</b>"]
+    for k, v in props.items():
+        if k != "name":
+            title_lines.append(f"{k}: {v}")
+    return nid, {
+        "id": nid,
+        "label": name,
+        "group": label,
+        "title": "<br>".join(title_lines),
+        **style,
+    }
+
+
+def _build_vis_edge(rel, from_id, to_id):
+    """Convert a Neo4j relationship to a vis.js edge dict."""
+    rel_type = rel.type
+    rel_props = dict(rel)
+    edge_label = rel_type.replace("_", " ")
+    if "commitment_mm" in rel_props:
+        edge_label += f"\n${rel_props['commitment_mm']}MM"
+    edge_title_lines = [f"<b>{rel_type}</b>"]
+    for k, v in rel_props.items():
+        edge_title_lines.append(f"{k}: {v}")
+    return {
+        "from": from_id,
+        "to": to_id,
+        "label": edge_label,
+        "title": "<br>".join(edge_title_lines),
+        "arrows": "to",
+        "font": {"size": 10, "align": "middle"},
+    }
+
+
+@app.get("/api/graph/{label}/{name}")
+async def get_entity_graph(label: str, name: str):
+    """Return entity-scoped graph for vis.js.
+
+    Borrower: borrower + its deals + lenders on those deals + sector.
+    Lender: lender + its deals + borrowers on those deals + their sectors.
+    """
+    if label == "Borrower":
+        query = """
+            MATCH (b:Borrower {name: $name})-[r1:BORROWED]->(d:Deal)
+            OPTIONAL MATCH (l:Lender)-[r2:LENT_TO]->(d)
+            OPTIONAL MATCH (b)-[r3:IN_SECTOR]->(s:Sector)
+            RETURN b, r1, d, l, r2, s, r3
+        """
+    elif label == "Lender":
+        query = """
+            MATCH (l:Lender {name: $name})-[r2:LENT_TO]->(d:Deal)
+            OPTIONAL MATCH (b:Borrower)-[r1:BORROWED]->(d)
+            OPTIONAL MATCH (b)-[r3:IN_SECTOR]->(s:Sector)
+            RETURN b, r1, d, l, r2, s, r3
+        """
+    else:
+        raise HTTPException(status_code=400, detail="Label must be Borrower or Lender")
+
+    records, _, _ = driver.execute_query(query, name=name, database_="neo4j")
+    if not records:
+        raise HTTPException(status_code=404, detail=f"{label} '{name}' not found")
+
+    nodes_map: dict[str, dict] = {}
+    edges: list[dict] = []
+    edge_set: set[tuple] = set()
+
+    for record in records:
+        for node_key in ("b", "d", "l", "s"):
+            node = record.get(node_key)
+            if node is None:
+                continue
+            nid, vis_node = _build_vis_node(node)
+            if nid not in nodes_map:
+                nodes_map[nid] = vis_node
+
+        # borrower -> deal
+        if record.get("r1") is not None:
+            b_id = _node_id("Borrower", record["b"]["name"])
+            d_id = _node_id("Deal", record["d"]["name"])
+            ek = (b_id, "BORROWED", d_id)
+            if ek not in edge_set:
+                edge_set.add(ek)
+                edges.append(_build_vis_edge(record["r1"], b_id, d_id))
+
+        # lender -> deal
+        if record.get("r2") is not None:
+            l_id = _node_id("Lender", record["l"]["name"])
+            d_id = _node_id("Deal", record["d"]["name"])
+            ek = (l_id, "LENT_TO", d_id)
+            if ek not in edge_set:
+                edge_set.add(ek)
+                edges.append(_build_vis_edge(record["r2"], l_id, d_id))
+
+        # borrower -> sector
+        if record.get("r3") is not None:
+            b_id = _node_id("Borrower", record["b"]["name"])
+            s_id = _node_id("Sector", record["s"]["name"])
+            ek = (b_id, "IN_SECTOR", s_id)
+            if ek not in edge_set:
+                edge_set.add(ek)
+                edges.append(_build_vis_edge(record["r3"], b_id, s_id))
+
+    return {"nodes": list(nodes_map.values()), "edges": edges}
+
+
 @app.get("/api/graph")
 async def get_graph():
     """Return all nodes and edges formatted for vis.js Network."""
