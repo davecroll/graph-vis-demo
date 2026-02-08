@@ -1,11 +1,49 @@
-# Test your FastAPI endpoints
+# Test Direct Lending Graph API endpoints
 
+### Serve frontend
 GET http://127.0.0.1:8000/
+Accept: text/html
+
+###
+
+### Get full graph (vis.js format)
+GET http://127.0.0.1:8000/api/graph
 Accept: application/json
 
 ###
 
-GET http://127.0.0.1:8000/hello/User
+### Get node detail - Borrower
+GET http://127.0.0.1:8000/api/node/Borrower/MedTech%20Solutions
+Accept: application/json
+
+###
+
+### Get node detail - Lender
+GET http://127.0.0.1:8000/api/node/Lender/Ares%20Capital
+Accept: application/json
+
+###
+
+### Get node detail - Deal
+GET http://127.0.0.1:8000/api/node/Deal/PrecisionMfg%20TL-B
+Accept: application/json
+
+###
+
+### Get node detail - Sector
+GET http://127.0.0.1:8000/api/node/Sector/Healthcare
+Accept: application/json
+
+###
+
+### Get stats summary
+GET http://127.0.0.1:8000/api/stats
+Accept: application/json
+
+###
+
+### 404 - nonexistent node
+GET http://127.0.0.1:8000/api/node/Borrower/Nonexistent
 Accept: application/json
 
 ###
