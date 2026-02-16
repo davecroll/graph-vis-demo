@@ -8,9 +8,89 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j import GraphDatabase
+from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings
 
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_AUTH = ("neo4j", "demo1234")
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+
+class Settings(BaseSettings):
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "demo1234"
+
+
+settings = Settings()
+
+
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class BorrowerSummary(BaseModel):
+    name: str
+    revenue_mm: float | None = None
+    deal_count: int
+    total_volume_mm: float | None = None
+
+
+class LenderSummary(BaseModel):
+    name: str
+    aum_bn: float | None = None
+    deal_count: int
+    total_commitment_mm: float | None = None
+
+
+class EntityListResponse(BaseModel):
+    borrowers: list[BorrowerSummary]
+    lenders: list[LenderSummary]
+
+
+class VisNode(BaseModel, extra="allow"):
+    id: str
+    label: str
+    group: str
+    title: str
+
+
+class VisEdge(BaseModel, extra="allow"):
+    from_field: str = Field(alias="from")
+    to: str
+    label: str
+    title: str
+    arrows: str
+
+    model_config = {"populate_by_name": True, "serialize_by_alias": True}
+
+
+class GraphResponse(BaseModel):
+    nodes: list[VisNode]
+    edges: list[VisEdge]
+
+
+class Connection(BaseModel, extra="allow"):
+    relationship: str
+    relationship_props: dict[str, Any]
+    node_label: str
+    node_name: str
+    node_props: dict[str, Any]
+
+
+class NodeDetail(BaseModel):
+    label: str
+    name: str
+    properties: dict[str, Any]
+    connections: list[Connection]
+
+
+class StatsResponse(BaseModel):
+    borrowers: int
+    lenders: int
+    deals: int
+    sectors: int
+    total_deal_volume_mm: float
 
 driver = None
 
@@ -18,7 +98,9 @@ driver = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global driver
-    driver = GraphDatabase.driver(NEO4J_URI, auth=NEO4J_AUTH)
+    driver = GraphDatabase.driver(
+        settings.neo4j_uri, auth=(settings.neo4j_user, settings.neo4j_password)
+    )
     driver.verify_connectivity()
     yield
     driver.close()
@@ -121,42 +203,33 @@ def _add_edge(
         edges.append(_build_vis_edge(rel, from_id, to_id))
 
 
-def _records_to_entity_list(records, node_key: str, extra_keys: list[str]) -> list[dict]:
-    """Convert Neo4j records to a list of dicts with node props and extra aggregation fields."""
-    result = []
-    for record in records:
-        props = dict(record[node_key])
-        for key in extra_keys:
-            props[key] = record[key]
-        result.append(props)
-    return result
-
-
 @app.get("/api/entities")
-async def get_entities() -> dict[str, list[dict]]:
+async def get_entities() -> EntityListResponse:
     """Return borrowers and lenders with summary stats for the homepage."""
     borrower_records, _, _ = driver.execute_query(
         """MATCH (b:Borrower)-[:BORROWED]->(d:Deal)
            WITH b, count(d) AS deal_count, sum(d.amount_mm) AS total_volume_mm
-           RETURN b, deal_count, total_volume_mm
+           RETURN b.name AS name, b.revenue_mm AS revenue_mm,
+                  deal_count, total_volume_mm
            ORDER BY b.name""",
         database_="neo4j",
     )
     lender_records, _, _ = driver.execute_query(
         """MATCH (l:Lender)-[p:LENT_TO]->(d:Deal)
            WITH l, count(d) AS deal_count, sum(p.commitment_mm) AS total_commitment_mm
-           RETURN l, deal_count, total_commitment_mm
+           RETURN l.name AS name, l.aum_bn AS aum_bn,
+                  deal_count, total_commitment_mm
            ORDER BY l.name""",
         database_="neo4j",
     )
-    return {
-        "borrowers": _records_to_entity_list(borrower_records, "b", ["deal_count", "total_volume_mm"]),
-        "lenders": _records_to_entity_list(lender_records, "l", ["deal_count", "total_commitment_mm"]),
-    }
+    return EntityListResponse(
+        borrowers=[BorrowerSummary(**dict(r)) for r in borrower_records],
+        lenders=[LenderSummary(**dict(r)) for r in lender_records],
+    )
 
 
 @app.get("/api/graph/{label}/{name}")
-async def get_entity_graph(label: str, name: str) -> dict[str, list[dict]]:
+async def get_entity_graph(label: str, name: str) -> GraphResponse:
     """Return entity-scoped graph for vis.js.
 
     Borrower: borrower + its deals + lenders on those deals + sector.
@@ -243,11 +316,11 @@ async def get_entity_graph(label: str, name: str) -> dict[str, list[dict]]:
             node_data["color"] = {"background": node_data["color"], "opacity": 0.45}
             node_data["font"] = {"color": "#707090"}
 
-    return {"nodes": list(nodes_map.values()), "edges": edges}
+    return GraphResponse(nodes=list(nodes_map.values()), edges=edges)
 
 
 @app.get("/api/graph")
-async def get_graph() -> dict[str, list[dict]]:
+async def get_graph() -> GraphResponse:
     """Return all nodes and edges formatted for vis.js Network."""
     records, _, _ = driver.execute_query(
         """MATCH (n)
@@ -268,11 +341,11 @@ async def get_graph() -> dict[str, list[dict]]:
             tid = _ensure_node(target, nodes_map)
             edges.append(_build_vis_edge(rel, nid, tid))
 
-    return {"nodes": list(nodes_map.values()), "edges": edges}
+    return GraphResponse(nodes=list(nodes_map.values()), edges=edges)
 
 
 @app.get("/api/node/{label}/{name}")
-async def get_node(label: str, name: str) -> dict[str, Any]:
+async def get_node(label: str, name: str) -> NodeDetail:
     """Return node properties and all connected nodes."""
     records, _, _ = driver.execute_query(
         """MATCH (n)
@@ -310,16 +383,16 @@ async def get_node(label: str, name: str) -> dict[str, Any]:
             "node_props": dict(other),
         })
 
-    return {
-        "label": label,
-        "name": name,
-        "properties": properties,
-        "connections": connections,
-    }
+    return NodeDetail(
+        label=label,
+        name=name,
+        properties=properties,
+        connections=connections,
+    )
 
 
 @app.get("/api/stats")
-async def get_stats() -> dict[str, Any]:
+async def get_stats() -> StatsResponse:
     """Return summary counts and totals."""
     records, _, _ = driver.execute_query(
         """MATCH (b:Borrower) WITH count(b) AS borrowers
@@ -332,10 +405,10 @@ async def get_stats() -> dict[str, Any]:
         database_="neo4j",
     )
     row = records[0]
-    return {
-        "borrowers": row["borrowers"],
-        "lenders": row["lenders"],
-        "deals": row["deals"],
-        "sectors": row["sectors"],
-        "total_deal_volume_mm": row["total_deal_volume_mm"],
-    }
+    return StatsResponse(
+        borrowers=row["borrowers"],
+        lenders=row["lenders"],
+        deals=row["deals"],
+        sectors=row["sectors"],
+        total_deal_volume_mm=row["total_deal_volume_mm"],
+    )
